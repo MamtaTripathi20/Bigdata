@@ -1,0 +1,1094 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Music Recommender — Deep Technical Investigation</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=Syne:wght@400;600;700;800&display=swap');
+
+  :root {
+    --bg: #080b10;
+    --surface: #0e1219;
+    --surface2: #141921;
+    --border: rgba(255,255,255,0.07);
+    --text: #e2e8f0;
+    --muted: #64748b;
+    --accent-red: #f87171;
+    --accent-amber: #fbbf24;
+    --accent-green: #34d399;
+    --accent-blue: #60a5fa;
+    --accent-purple: #a78bfa;
+    --accent-pink: #f472b6;
+    --font-mono: 'JetBrains Mono', monospace;
+    --font-display: 'Syne', sans-serif;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: 13px;
+    line-height: 1.7;
+  }
+
+  /* ── Scanline overlay ── */
+  body::before {
+    content: '';
+    position: fixed; inset: 0;
+    background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.03) 2px, rgba(0,0,0,0.03) 4px);
+    pointer-events: none; z-index: 9999;
+  }
+
+  /* ── Header ── */
+  .header {
+    padding: 48px 48px 32px;
+    border-bottom: 1px solid var(--border);
+    background: linear-gradient(180deg, rgba(96,165,250,0.04) 0%, transparent 100%);
+  }
+  .header-badge {
+    display: inline-block;
+    font-size: 10px; font-weight: 700; letter-spacing: 0.2em; text-transform: uppercase;
+    padding: 4px 10px; border-radius: 4px;
+    background: rgba(248,113,113,0.12); color: var(--accent-red);
+    border: 1px solid rgba(248,113,113,0.25); margin-bottom: 16px;
+  }
+  .header h1 {
+    font-family: var(--font-display);
+    font-size: 36px; font-weight: 800; line-height: 1.1;
+    background: linear-gradient(135deg, #fff 0%, #60a5fa 50%, #a78bfa 100%);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    background-clip: text; margin-bottom: 10px;
+  }
+  .header-sub { color: var(--muted); font-size: 12px; }
+  .header-meta { display: flex; gap: 24px; margin-top: 20px; }
+  .meta-item { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--muted); }
+  .dot { width: 6px; height: 6px; border-radius: 50%; }
+
+  /* ── Layout ── */
+  .layout { display: grid; grid-template-columns: 220px 1fr; min-height: calc(100vh - 180px); }
+
+  /* ── Sidebar ── */
+  .sidebar {
+    padding: 24px 16px;
+    border-right: 1px solid var(--border);
+    position: sticky; top: 0; height: 100vh; overflow-y: auto;
+    background: var(--surface);
+  }
+  .sidebar-section-label {
+    font-size: 9px; font-weight: 700; letter-spacing: 0.18em; text-transform: uppercase;
+    color: var(--muted); padding: 0 8px; margin-bottom: 6px; margin-top: 20px;
+  }
+  .sidebar-section-label:first-child { margin-top: 0; }
+  .sidebar a {
+    display: flex; align-items: center; gap: 8px;
+    padding: 5px 8px; border-radius: 6px; text-decoration: none;
+    color: rgba(226,232,240,0.6); font-size: 11px;
+    transition: all 0.15s; white-space: nowrap;
+  }
+  .sidebar a:hover { background: rgba(255,255,255,0.05); color: #fff; }
+  .sidebar a .num {
+    font-size: 9px; min-width: 16px; text-align: right; color: var(--muted);
+  }
+  .sidebar a.critical { color: var(--accent-red); }
+  .sidebar a.critical:hover { background: rgba(248,113,113,0.1); }
+
+  /* ── Main content ── */
+  .main { padding: 40px 48px; max-width: 900px; }
+
+  /* ── Section ── */
+  .section { margin-bottom: 56px; }
+  .section-header {
+    display: flex; align-items: baseline; gap: 12px;
+    border-bottom: 1px solid var(--border); padding-bottom: 12px; margin-bottom: 28px;
+  }
+  .section-num {
+    font-family: var(--font-display); font-size: 11px; font-weight: 700;
+    color: var(--accent-blue); opacity: 0.6;
+  }
+  .section-title {
+    font-family: var(--font-display); font-size: 20px; font-weight: 700; color: #fff;
+  }
+  .section-tag {
+    margin-left: auto; font-size: 9px; font-weight: 700; letter-spacing: 0.15em;
+    text-transform: uppercase; padding: 3px 8px; border-radius: 4px;
+  }
+  .tag-critical { background: rgba(248,113,113,0.15); color: var(--accent-red); border: 1px solid rgba(248,113,113,0.3); }
+  .tag-high { background: rgba(251,191,36,0.12); color: var(--accent-amber); border: 1px solid rgba(251,191,36,0.25); }
+  .tag-medium { background: rgba(96,165,250,0.1); color: var(--accent-blue); border: 1px solid rgba(96,165,250,0.2); }
+  .tag-good { background: rgba(52,211,153,0.1); color: var(--accent-green); border: 1px solid rgba(52,211,153,0.2); }
+
+  /* ── Bug card ── */
+  .bug-card {
+    border: 1px solid var(--border); border-radius: 10px;
+    background: var(--surface); margin-bottom: 20px; overflow: hidden;
+  }
+  .bug-card.severity-critical { border-color: rgba(248,113,113,0.35); }
+  .bug-card.severity-high { border-color: rgba(251,191,36,0.25); }
+  .bug-card.severity-medium { border-color: rgba(96,165,250,0.2); }
+
+  .bug-header {
+    display: flex; align-items: center; gap: 12px;
+    padding: 12px 16px;
+    background: rgba(255,255,255,0.025); border-bottom: 1px solid var(--border);
+  }
+  .bug-severity {
+    font-size: 9px; font-weight: 700; letter-spacing: 0.15em; text-transform: uppercase;
+    padding: 3px 8px; border-radius: 3px;
+  }
+  .sev-critical { background: rgba(248,113,113,0.2); color: var(--accent-red); }
+  .sev-high { background: rgba(251,191,36,0.15); color: var(--accent-amber); }
+  .sev-medium { background: rgba(96,165,250,0.12); color: var(--accent-blue); }
+
+  .bug-title { font-family: var(--font-display); font-size: 14px; font-weight: 600; color: #fff; }
+  .bug-location { margin-left: auto; font-size: 10px; color: var(--muted); font-family: var(--font-mono); }
+
+  .bug-body { padding: 16px; }
+  .bug-body p { color: rgba(226,232,240,0.75); margin-bottom: 10px; font-size: 12px; }
+  .bug-body p:last-child { margin-bottom: 0; }
+
+  .label {
+    display: inline-block; font-size: 9px; font-weight: 700; letter-spacing: 0.12em;
+    text-transform: uppercase; color: var(--muted); margin-bottom: 6px; margin-top: 12px;
+  }
+
+  /* ── Code block ── */
+  pre {
+    background: #0a0d12; border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 8px; padding: 14px 16px; overflow-x: auto;
+    font-family: var(--font-mono); font-size: 11.5px; line-height: 1.6;
+    margin: 8px 0;
+  }
+  code { font-family: var(--font-mono); }
+  .code-bad { color: #fca5a5; background: rgba(248,113,113,0.07); }
+  .code-good { color: #6ee7b7; background: rgba(52,211,153,0.07); }
+  .code-comment { color: #475569; }
+  .code-kw { color: #93c5fd; }
+  .code-str { color: #86efac; }
+  .code-fn { color: #c4b5fd; }
+  .code-num { color: #fde68a; }
+  .code-type { color: #67e8f9; }
+
+  .diff-block { border-radius: 8px; overflow: hidden; margin: 8px 0; border: 1px solid rgba(255,255,255,0.08); }
+  .diff-minus { background: rgba(248,113,113,0.08); padding: 2px 16px; font-size: 11.5px; color: #fca5a5; font-family: var(--font-mono); }
+  .diff-plus { background: rgba(52,211,153,0.08); padding: 2px 16px; font-size: 11.5px; color: #6ee7b7; font-family: var(--font-mono); }
+  .diff-ctx { padding: 2px 16px; font-size: 11.5px; color: #64748b; font-family: var(--font-mono); background: #0a0d12; }
+  .diff-hdr { background: rgba(255,255,255,0.04); padding: 6px 16px; font-size: 10px; color: var(--muted); border-bottom: 1px solid var(--border); }
+
+  /* ── Info grid ── */
+  .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 16px 0; }
+  .info-card {
+    padding: 14px; border-radius: 8px;
+    background: var(--surface2); border: 1px solid var(--border);
+  }
+  .info-card-label { font-size: 9px; font-weight: 700; letter-spacing: 0.15em; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; }
+  .info-card-value { font-size: 13px; color: #fff; font-family: var(--font-display); font-weight: 600; }
+  .info-card-sub { font-size: 10px; color: var(--muted); margin-top: 2px; }
+
+  /* ── Flow diagram ── */
+  .flow {
+    display: flex; align-items: center; gap: 0; flex-wrap: wrap;
+    margin: 16px 0; padding: 16px; background: var(--surface2);
+    border-radius: 8px; border: 1px solid var(--border);
+  }
+  .flow-step {
+    display: flex; flex-direction: column; align-items: center; gap: 4px;
+    padding: 8px 12px; border-radius: 6px; background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08); min-width: 80px; text-align: center;
+  }
+  .flow-step .icon { font-size: 16px; }
+  .flow-step .name { font-size: 10px; font-weight: 600; color: #fff; }
+  .flow-step .sub { font-size: 9px; color: var(--muted); }
+  .flow-arrow { padding: 0 6px; color: var(--muted); font-size: 14px; }
+
+  /* ── Table ── */
+  table { width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 11.5px; }
+  th {
+    text-align: left; padding: 8px 12px; font-size: 9px; font-weight: 700;
+    letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted);
+    border-bottom: 1px solid var(--border); background: rgba(255,255,255,0.02);
+  }
+  td { padding: 8px 12px; border-bottom: 1px solid rgba(255,255,255,0.04); color: rgba(226,232,240,0.8); vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: rgba(255,255,255,0.02); }
+
+  .pill {
+    display: inline-block; font-size: 9px; font-weight: 700; letter-spacing: 0.1em;
+    text-transform: uppercase; padding: 2px 7px; border-radius: 3px;
+  }
+  .pill-red { background: rgba(248,113,113,0.15); color: #fca5a5; }
+  .pill-amber { background: rgba(251,191,36,0.12); color: #fde68a; }
+  .pill-green { background: rgba(52,211,153,0.1); color: #6ee7b7; }
+  .pill-blue { background: rgba(96,165,250,0.1); color: #93c5fd; }
+
+  /* ── Callout ── */
+  .callout {
+    padding: 12px 16px; border-radius: 8px; margin: 12px 0;
+    display: flex; gap: 10px; align-items: flex-start;
+    font-size: 12px;
+  }
+  .callout-icon { font-size: 14px; flex-shrink: 0; margin-top: 1px; }
+  .callout-body { flex: 1; }
+  .callout-title { font-weight: 700; margin-bottom: 3px; }
+  .callout.warn { background: rgba(251,191,36,0.07); border: 1px solid rgba(251,191,36,0.2); color: #fde68a; }
+  .callout.error { background: rgba(248,113,113,0.07); border: 1px solid rgba(248,113,113,0.2); color: #fca5a5; }
+  .callout.info { background: rgba(96,165,250,0.07); border: 1px solid rgba(96,165,250,0.18); color: #93c5fd; }
+  .callout.success { background: rgba(52,211,153,0.07); border: 1px solid rgba(52,211,153,0.18); color: #6ee7b7; }
+
+  /* ── Roadmap ── */
+  .phase-card {
+    border: 1px solid var(--border); border-radius: 10px;
+    background: var(--surface); margin-bottom: 16px; overflow: hidden;
+  }
+  .phase-header {
+    padding: 14px 20px; display: flex; align-items: center; gap: 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  .phase-num {
+    width: 32px; height: 32px; border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--font-display); font-weight: 800; font-size: 14px;
+  }
+  .phase-1 { background: rgba(248,113,113,0.15); color: var(--accent-red); }
+  .phase-2 { background: rgba(251,191,36,0.12); color: var(--accent-amber); }
+  .phase-3 { background: rgba(52,211,153,0.1); color: var(--accent-green); }
+  .phase-title { font-family: var(--font-display); font-size: 15px; font-weight: 700; color: #fff; }
+  .phase-sub { font-size: 10px; color: var(--muted); }
+  .phase-body { padding: 16px 20px; }
+  .phase-item {
+    display: flex; gap: 10px; align-items: flex-start;
+    margin-bottom: 10px; font-size: 12px; color: rgba(226,232,240,0.75);
+  }
+  .phase-item:last-child { margin-bottom: 0; }
+  .phase-item-bullet { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; margin-top: 6px; }
+  .b-red { background: var(--accent-red); }
+  .b-amber { background: var(--accent-amber); }
+  .b-green { background: var(--accent-green); }
+  .b-blue { background: var(--accent-blue); }
+  .b-purple { background: var(--accent-purple); }
+
+  h3 { font-family: var(--font-display); font-size: 14px; font-weight: 700; color: #fff; margin: 20px 0 10px; }
+  p { color: rgba(226,232,240,0.75); margin-bottom: 10px; font-size: 12px; }
+  ul { list-style: none; margin: 8px 0 12px; }
+  ul li { display: flex; gap: 8px; align-items: flex-start; margin-bottom: 6px; font-size: 12px; color: rgba(226,232,240,0.75); }
+  ul li::before { content: '→'; color: var(--muted); flex-shrink: 0; }
+
+  .inline-code {
+    font-family: var(--font-mono); font-size: 11px; padding: 1px 5px; border-radius: 3px;
+    background: rgba(255,255,255,0.07); color: #c4b5fd;
+  }
+
+  .score-summary {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 20px 0;
+  }
+  .score-card {
+    padding: 16px; border-radius: 8px; text-align: center;
+    border: 1px solid var(--border); background: var(--surface2);
+  }
+  .score-val { font-family: var(--font-display); font-size: 28px; font-weight: 800; }
+  .score-label { font-size: 9px; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); margin-top: 4px; }
+
+  @media (max-width: 900px) {
+    .layout { grid-template-columns: 1fr; }
+    .sidebar { position: static; height: auto; }
+    .main { padding: 24px; }
+    .score-summary { grid-template-columns: 1fr 1fr; }
+    .info-grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ══════════════════════ HEADER ══════════════════════ -->
+<div class="header">
+  <div class="header-badge">🔍 Deep Technical Audit</div>
+  <h1>Music Recommender<br/>System Investigation</h1>
+  <div class="header-sub">Full-stack analysis: Next.js + FastAPI + PostgreSQL + Redis + Docker</div>
+  <div class="header-meta">
+    <div class="meta-item"><div class="dot" style="background:#f87171"></div> 6 Critical Bugs</div>
+    <div class="meta-item"><div class="dot" style="background:#fbbf24"></div> 7 High-Priority Issues</div>
+    <div class="meta-item"><div class="dot" style="background:#60a5fa"></div> 5 Architecture Concerns</div>
+    <div class="meta-item"><div class="dot" style="background:#34d399"></div> 3 ML/AI Pipelines Analyzed</div>
+  </div>
+</div>
+
+<div class="layout">
+
+<!-- ══════════════════════ SIDEBAR ══════════════════════ -->
+<nav class="sidebar">
+  <div class="sidebar-section-label">Overview</div>
+  <a href="#s1"><span class="num">1</span> System Architecture</a>
+  <a href="#s2"><span class="num">2</span> Architecture Deep Dive</a>
+
+  <div class="sidebar-section-label">🐞 Bugs</div>
+  <a href="#s3" class="critical"><span class="num">3</span> Critical Bugs</a>
+  <a href="#b1" class="critical"><span class="num">B1</span> next() Always Breaks</a>
+  <a href="#b2" class="critical"><span class="num">B2</span> Redis Conn Leak</a>
+  <a href="#b3" class="critical"><span class="num">B3</span> Like → Phantom Plays</a>
+  <a href="#b4" class="critical"><span class="num">B4</span> artist_id Missing</a>
+  <a href="#b5" class="critical"><span class="num">B5</span> Score Exceeds 1.0</a>
+  <a href="#b6" class="critical"><span class="num">B6</span> Secret Key Exposed</a>
+
+  <div class="sidebar-section-label">Analysis</div>
+  <a href="#s4"><span class="num">4</span> Recommendation System</a>
+  <a href="#s5"><span class="num">5</span> State Management</a>
+  <a href="#s6"><span class="num">6</span> Performance</a>
+  <a href="#s7"><span class="num">7</span> Security</a>
+  <a href="#s8"><span class="num">8</span> Docker Setup</a>
+  <a href="#s9"><span class="num">9</span> UX / Product</a>
+  <a href="#s10"><span class="num">10</span> Roadmap</a>
+</nav>
+
+<!-- ══════════════════════ MAIN ══════════════════════ -->
+<main class="main">
+
+<!-- ══════════════ SECTION 1: SYSTEM UNDERSTANDING ══════════════ -->
+<section class="section" id="s1">
+  <div class="section-header">
+    <span class="section-num">01</span>
+    <h2 class="section-title">System Understanding — End-to-End</h2>
+    <span class="section-tag tag-good">OVERVIEW</span>
+  </div>
+
+  <div class="score-summary">
+    <div class="score-card"><div class="score-val" style="color:#60a5fa">3</div><div class="score-label">Rec Modes</div></div>
+    <div class="score-card"><div class="score-val" style="color:#a78bfa">9D</div><div class="score-label">Feature Vector</div></div>
+    <div class="score-card"><div class="score-val" style="color:#34d399">200M</div><div class="score-label">iTunes Catalog</div></div>
+    <div class="score-card"><div class="score-val" style="color:#fbbf24">10K</div><div class="score-label">MSD Songs (DB)</div></div>
+  </div>
+
+  <h3>What This App Actually Does</h3>
+  <p>A multi-mode music recommendation system with three distinct AI pipelines. Users authenticate, complete a "Vibe Check" onboarding quiz that seeds their taste profile, then receive personalized song recommendations. Songs can be played via YouTube's embed API (hidden iframe), added to queues, liked, and organized into playlists.</p>
+
+  <h3>End-to-End Flow: User → Recommendation → Playback</h3>
+  <div class="flow">
+    <div class="flow-step"><div class="icon">🧑</div><div class="name">User Login</div><div class="sub">JWT token</div></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-step"><div class="icon">🎯</div><div class="name">Vibe Check</div><div class="sub">Seed 9D vector</div></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-step"><div class="icon">🎛️</div><div class="name">Mode Select</div><div class="sub">analytics/genai/hybrid</div></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-step"><div class="icon">⚡</div><div class="name">GET /api/v1<br/>/recommendations</div><div class="sub">React Query</div></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-step"><div class="icon">🧠</div><div class="name">Pipeline</div><div class="sub">FCM+CF / embed / both</div></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-step"><div class="icon">🎵</div><div class="name">SongCard Feed</div><div class="sub">Play via YT</div></div>
+  </div>
+
+  <h3>Three Recommendation Pipelines</h3>
+  <table>
+    <tr><th>Mode</th><th>Algorithm</th><th>Cold Start?</th><th>Data Source</th><th>Latency</th></tr>
+    <tr><td><span class="pill pill-blue">Analytics</span></td><td>Fuzzy C-Means (30%) + Collaborative Filtering (40%) + Lookalike cosine+jaccard (30%)</td><td>❌ Falls back to popular</td><td>PostgreSQL (MSD 10K)</td><td>~150ms</td></tr>
+    <tr><td><span class="pill pill-amber">GenAI</span></td><td>iTunes search → Sentence Transformer (all-mpnet-base-v2) cosine similarity</td><td>✅ Works immediately</td><td>iTunes API (200M songs)</td><td>~500ms warm / ~3s cold</td></tr>
+    <tr><td><span class="pill pill-red">Hybrid</span></td><td>Both pipelines parallel + weighted fusion: α·S_analytics + β·S_genai + γ·diversity</td><td>✅ Dynamic weights</td><td>Both</td><td>~500ms cached</td></tr>
+  </table>
+
+  <h3>Key Data Flows</h3>
+  <ul>
+    <li>Play event → <span class="inline-code">POST /api/v1/recommendations/play</span> → <span class="inline-code">play_history</span> table + play_count++ + Redis cache invalidation (<span class="inline-code">uservec:{id}</span>)</li>
+    <li>Vibe check → <span class="inline-code">user_preferences</span> table (9D vector) → analytics cold-start seed</li>
+    <li>GenAI pipeline → iTunes API → auto-saves new songs to PostgreSQL → embedding cached in Redis 24h</li>
+    <li>YouTube playback → hidden 1px iframe + postMessage API → progress/duration via infoDelivery events</li>
+  </ul>
+</section>
+
+<!-- ══════════════ SECTION 2: ARCHITECTURE ══════════════ -->
+<section class="section" id="s2">
+  <div class="section-header">
+    <span class="section-num">02</span>
+    <h2 class="section-title">Architecture Deep Dive</h2>
+    <span class="section-tag tag-medium">ANALYSIS</span>
+  </div>
+
+  <h3>Frontend Structure (Next.js App Router)</h3>
+  <table>
+    <tr><th>Layer</th><th>File</th><th>Responsibility</th></tr>
+    <tr><td>Pages</td><td><span class="inline-code">app/page.tsx</span></td><td>Main feed. Owns mode state + queryText. Delegates data fetching to <span class="inline-code">useRecommendations</span> hook.</td></tr>
+    <tr><td>Pages</td><td><span class="inline-code">app/library/page.tsx</span></td><td>Liked songs + playlists. Uses local state for data; no React Query (manual fetch/set).</td></tr>
+    <tr><td>Components</td><td><span class="inline-code">RecommendationFeed.tsx</span></td><td>Stateless presenter. Maps <span class="inline-code">RecommendationResponse</span> → list of SongCard. Handles empty/loading/error states cleanly.</td></tr>
+    <tr><td>Components</td><td><span class="inline-code">SongCard.tsx</span></td><td>Renders one song. Accesses PlayerContext directly via <span class="inline-code">usePlayer()</span>. Has local showMenu state. Good encapsulation.</td></tr>
+    <tr><td>Context</td><td><span class="inline-code">PlayerContext.tsx</span></td><td>Global player state: currentSong, queue, YouTube ID, progress, likes, autoplay. Manages YouTube iframe lifecycle.</td></tr>
+    <tr><td>Hook</td><td><span class="inline-code">useRecommendations.ts</span></td><td>Thin React Query wrapper. <span class="inline-code">staleTime</span> 30s/60s depending on mode.</td></tr>
+    <tr><td>API Layer</td><td><span class="inline-code">lib/api.ts</span></td><td>Axios instance. JWT injected per-request from localStorage. Timeout 180s (for cold embedding model).</td></tr>
+  </table>
+
+  <h3>Backend Structure (FastAPI)</h3>
+  <table>
+    <tr><th>Layer</th><th>File</th><th>Notes</th></tr>
+    <tr><td>Entry</td><td><span class="inline-code">main.py</span></td><td>Lifespan: creates DB tables + warms embedding model async. CORS allows localhost only.</td></tr>
+    <tr><td>Route</td><td><span class="inline-code">routes/recommendations.py</span></td><td>Single GET endpoint routes to 3 pipelines. Redis instantiated per-request (bug: never closed). Play event endpoint with cache invalidation.</td></tr>
+    <tr><td>Pipeline</td><td><span class="inline-code">analytics_pipeline.py</span></td><td>FCM + CF + lookalike. User vector Redis-cached 5min. Graceful fallback chain: history → vibe prefs → popular.</td></tr>
+    <tr><td>Pipeline</td><td><span class="inline-code">genai_pipeline.py</span></td><td>iTunes search + sentence transformer. Per-song embedding cached in Redis 24h. Auto-saves songs to DB. Good cache key design.</td></tr>
+    <tr><td>Pipeline</td><td><span class="inline-code">hybrid_pipeline.py</span></td><td>asyncio.gather() parallel execution. Dynamic weight selection based on user warmth. Diversity cap at 60% per genre.</td></tr>
+    <tr><td>Models</td><td><span class="inline-code">db_models.py</span></td><td>10 tables. SongFeature has a 9D vector. Playlist.is_public bug was already fixed. Good indexing.</td></tr>
+  </table>
+
+  <div class="callout info">
+    <div class="callout-icon">ℹ️</div>
+    <div class="callout-body">
+      <div class="callout-title">What Works Well</div>
+      The fallback chain in AnalyticsPipeline is well-designed (history → vibe prefs → popular). The Hybrid pipeline's dynamic weight system based on user "warmth" is genuinely smart. React Query's staleTime differentiation per mode shows good thought. The RecommendationFeed → SongCard prop flow is clean and type-safe.
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════ SECTION 3: CRITICAL BUGS ══════════════ -->
+<section class="section" id="s3">
+  <div class="section-header">
+    <span class="section-num">03</span>
+    <h2 class="section-title">Critical Bug Investigation</h2>
+    <span class="section-tag tag-critical">HIGH PRIORITY</span>
+  </div>
+
+  <!-- BUG 1 -->
+  <div class="bug-card severity-critical" id="b1">
+    <div class="bug-header">
+      <span class="bug-severity sev-critical">CRITICAL</span>
+      <span class="bug-title">next() Button Is Completely Non-Functional</span>
+      <span class="bug-location">PlayerContext.tsx · next()</span>
+    </div>
+    <div class="bug-body">
+      <p>The "Skip to next" button in PlayerBar calls <span class="inline-code">next()</span>, which does absolutely nothing. This is a self-cancelling guard bug — the function sets the "already fired" guard to <span class="inline-code">true</span>, then calls the handler whose <strong>first line</strong> returns early if the guard is true.</p>
+      <div class="label">Root Cause</div>
+      <div class="diff-block">
+        <div class="diff-hdr">PlayerContext.tsx — next()</div>
+        <div class="diff-minus">- songEndedFiredRef.current = true;  // ← arms the guard</div>
+        <div class="diff-minus">- handleSongEndedRef.current?.();     // ← then calls handler...</div>
+        <div class="diff-ctx">  // Inside handleSongEndedRef.current:</div>
+        <div class="diff-minus">- if (songEndedFiredRef.current) return; // ← ...which immediately returns!</div>
+      </div>
+      <div class="label">Fix</div>
+      <div class="diff-block">
+        <div class="diff-hdr">PlayerContext.tsx — corrected next()</div>
+        <div class="diff-minus">- const next = useCallback(() => {</div>
+        <div class="diff-minus">-   songEndedFiredRef.current = true;</div>
+        <div class="diff-minus">-   handleSongEndedRef.current?.();</div>
+        <div class="diff-minus">- }, []);</div>
+        <div class="diff-plus">+ const next = useCallback(() => {</div>
+        <div class="diff-plus">+   // Skip the guard: manually force the next song</div>
+        <div class="diff-plus">+   songEndedFiredRef.current = false;  // clear guard so handler runs</div>
+        <div class="diff-plus">+   handleSongEndedRef.current?.();</div>
+        <div class="diff-plus">+ }, []);</div>
+      </div>
+      <p style="margin-top:10px">Alternatively, extract queue-advance logic into its own function separate from the "song ended" guard, so manual skip bypasses the guard entirely.</p>
+    </div>
+  </div>
+
+  <!-- BUG 2 -->
+  <div class="bug-card severity-critical" id="b2">
+    <div class="bug-header">
+      <span class="bug-severity sev-critical">CRITICAL</span>
+      <span class="bug-title">Redis Connection Leaked on Every Recommendation Request</span>
+      <span class="bug-location">routes/recommendations.py · get_recommendations()</span>
+    </div>
+    <div class="bug-body">
+      <p><span class="inline-code">_get_redis()</span> creates a new async Redis client per request. In <span class="inline-code">log_play_event</span> it's properly closed with <span class="inline-code">await redis.aclose()</span>. But in <span class="inline-code">get_recommendations</span> — the hot path — the client is passed into pipelines and <strong>never closed</strong>. Under any real traffic, this exhausts the Redis connection pool.</p>
+      <div class="label">Fix — Use a Context Manager or Dependency Injection</div>
+      <pre><code><span class="code-comment"># Option A: async context manager (safest)</span>
+<span class="code-kw">async def</span> <span class="code-fn">get_recommendations</span>(...):
+    <span class="code-kw">async with</span> aioredis.from_url(settings.REDIS_URL, decode_responses=<span class="code-type">False</span>) <span class="code-kw">as</span> redis:
+        <span class="code-kw">if</span> mode == RecommendationMode.ANALYTICS:
+            <span class="code-kw">return await</span> AnalyticsPipeline(db, redis).recommend(...)
+        ...
+
+<span class="code-comment"># Option B: FastAPI dependency with proper teardown</span>
+<span class="code-kw">async def</span> <span class="code-fn">get_redis</span>():
+    r = aioredis.from_url(settings.REDIS_URL, decode_responses=<span class="code-type">False</span>)
+    <span class="code-kw">try</span>:
+        <span class="code-kw">yield</span> r
+    <span class="code-kw">finally</span>:
+        <span class="code-kw">await</span> r.aclose()
+
+<span class="code-comment"># In route:</span>
+<span class="code-kw">async def</span> <span class="code-fn">get_recommendations</span>(..., redis = Depends(get_redis)):
+    ...</code></pre>
+    </div>
+  </div>
+
+  <!-- BUG 3 -->
+  <div class="bug-card severity-critical" id="b3">
+    <div class="bug-header">
+      <span class="bug-severity sev-critical">CRITICAL</span>
+      <span class="bug-title">Liking a Song Inflates play_count — Corrupts Recommendation Scores</span>
+      <span class="bug-location">PlayerContext.tsx · toggleLike() + recommendations.py · log_play_event()</span>
+    </div>
+    <div class="bug-body">
+      <p>When a user clicks the ❤️ on any SongCard, <span class="inline-code">toggleLike()</span> calls <span class="inline-code">recommendApi.logPlay({ song_id, liked })</span>. The backend receives this as a <span class="inline-code">PlayEvent</span> with <span class="inline-code">skipped=False</span> (default), so it executes <span class="inline-code">song.play_count += 1</span>. Every like increases <span class="inline-code">play_count</span> even when the user never heard the song — which directly corrupts the Analytics popularity fallback and candidate pool ordering.</p>
+      <p>Additionally, <span class="inline-code">likedSongs</span> is an in-memory <span class="inline-code">Set&lt;number&gt;</span> in PlayerContext. On page refresh, all like state vanishes — but the backend already has a <span class="inline-code">PlayHistory</span> record with <span class="inline-code">liked=true</span>. The UI and DB are perpetually out of sync.</p>
+      <div class="label">Fix 1 — Separate "like" from "play" on the backend</div>
+      <pre><code><span class="code-comment"># In log_play_event — only increment play_count for actual plays</span>
+<span class="code-kw">if not</span> event.skipped <span class="code-kw">and not</span> event.liked:
+    <span class="code-comment"># A pure like event (song_id + liked=True, no other fields)</span>
+    <span class="code-comment"># should not count as a play</span>
+    song.play_count += <span class="code-num">1</span></code></pre>
+      <div class="label">Fix 2 — Hydrate likedSongs from backend on mount</div>
+      <pre><code><span class="code-comment">// In PlayerProvider useEffect</span>
+<span class="code-fn">useEffect</span>(() => {
+  <span class="code-kw">const</span> token = localStorage.getItem(<span class="code-str">'access_token'</span>);
+  <span class="code-kw">if</span> (!token) <span class="code-kw">return</span>;
+  libraryApi.getLikedSongs()
+    .then((r) => {
+      <span class="code-kw">const</span> ids = r.data.songs.map((s: <span class="code-type">any</span>) => s.song_id);
+      <span class="code-fn">setLikedSongs</span>(<span class="code-kw">new</span> Set(ids));
+    })
+    .catch(() => {});
+}, []);</code></pre>
+    </div>
+  </div>
+
+  <!-- BUG 4 -->
+  <div class="bug-card severity-critical" id="b4">
+    <div class="bug-header">
+      <span class="bug-severity sev-critical">CRITICAL</span>
+      <span class="bug-title">artist_id Is Never Set for GenAI / Hybrid Recommendations</span>
+      <span class="bug-location">genai_pipeline.py · _rank_with_embeddings()</span>
+    </div>
+    <div class="bug-body">
+      <p>In SongCard, clicking the artist name navigates to <span class="inline-code">/artists/{song.artist_id}</span> — but only if <span class="inline-code">song.artist_id</span> is truthy. For every song returned by GenAI or Hybrid mode, <span class="inline-code">artist_id</span> is <span class="inline-code">null</span> because <span class="inline-code">_rank_with_embeddings()</span> builds the <span class="inline-code">RecommendedSong</span> without it — even though the artist was just inserted into the DB and has an ID.</p>
+      <div class="label">Fix — Return artist_id from _save_song_to_db()</div>
+      <pre><code><span class="code-comment"># _save_song_to_db — return (song_id, artist_id) tuple</span>
+<span class="code-kw">return</span> song_id, artist_id   <span class="code-comment"># was: return song_id</span>
+
+<span class="code-comment"># In _rank_with_embeddings:</span>
+db_result = <span class="code-kw">await</span> self._save_song_to_db(candidate)
+<span class="code-kw">if not</span> db_result: <span class="code-kw">continue</span>
+db_id, db_artist_id = db_result
+
+recs.append(RecommendedSong(
+    song_id=db_id,
+    artist_id=db_artist_id,   <span class="code-comment"># ← add this</span>
+    ...
+))</code></pre>
+    </div>
+  </div>
+
+  <!-- BUG 5 -->
+  <div class="bug-card severity-high" id="b5">
+    <div class="bug-header">
+      <span class="bug-severity sev-high">HIGH</span>
+      <span class="bug-title">Hybrid Fusion Weights Don't Sum to 1.0 — Scores Exceed 100%</span>
+      <span class="bug-location">config.py · hybrid_pipeline.py · _fuse()</span>
+    </div>
+    <div class="bug-body">
+      <p>The config sets <span class="inline-code">FUSION_ALPHA=0.6</span>, <span class="inline-code">FUSION_BETA=0.4</span>, <span class="inline-code">FUSION_GAMMA=0.1</span>. Maximum possible score: <strong>0.6 + 0.4 + 0.1 = 1.1</strong>. Songs with a diversity bonus will have <span class="inline-code">score &gt; 1.0</span>, displayed in the UI as &gt;100% via <span class="inline-code">(song.score * 100).toFixed(0)%</span>.</p>
+      <div class="label">Fix — Normalize gamma or cap scores</div>
+      <pre><code><span class="code-comment"># Option A: Reduce weights so they sum to ≤ 1.0</span>
+FUSION_ALPHA: float = <span class="code-num">0.55</span>
+FUSION_BETA:  float = <span class="code-num">0.35</span>
+FUSION_GAMMA: float = <span class="code-num">0.10</span>  <span class="code-comment"># now sums to 1.0</span>
+
+<span class="code-comment"># Option B: Normalize final scores after computing all</span>
+max_score = max(s for s, _ <span class="code-kw">in</span> scored) <span class="code-kw">if</span> scored <span class="code-kw">else</span> <span class="code-num">1.0</span>
+scored = [(s / max(max_score, <span class="code-num">1e-9</span>), r) <span class="code-kw">for</span> s, r <span class="code-kw">in</span> scored]</code></pre>
+    </div>
+  </div>
+
+  <!-- BUG 6 -->
+  <div class="bug-card severity-critical" id="b6">
+    <div class="bug-header">
+      <span class="bug-severity sev-critical">CRITICAL</span>
+      <span class="bug-title">SECRET_KEY Committed in Plain Text to .env</span>
+      <span class="bug-location">.env · .gitignore</span>
+    </div>
+    <div class="bug-body">
+      <p>The file <span class="inline-code">.env</span> contains a real <span class="inline-code">SECRET_KEY</span> value and is included in the zip (and likely in git history). Any JWT signed with this key can be forged by anyone who has seen this file. The <span class="inline-code">.gitignore</span> should exclude <span class="inline-code">.env</span> but keep <span class="inline-code">.env.example</span>.</p>
+      <div class="label">Immediate Fix</div>
+      <pre><code><span class="code-comment"># 1. Rotate the secret immediately</span>
+python -c <span class="code-str">"import secrets; print(secrets.token_hex(32))"</span>
+
+<span class="code-comment"># 2. Add to .gitignore</span>
+.env
+!.env.example
+
+<span class="code-comment"># 3. All users must re-authenticate (old JWTs invalid)</span></code></pre>
+      <div class="callout error" style="margin-top:10px">
+        <div class="callout-icon">🚨</div>
+        <div class="callout-body">
+          <div class="callout-title">If this repo is on GitHub/GitLab</div>
+          Rotate the secret immediately and use <span class="inline-code">git filter-branch</span> or BFG Repo Cleaner to remove the secret from git history. Assume the key is compromised.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- BUG 7: prev() -->
+  <div class="bug-card severity-high">
+    <div class="bug-header">
+      <span class="bug-severity sev-high">HIGH</span>
+      <span class="bug-title">prev() Never Goes Back to Previous Song</span>
+      <span class="bug-location">PlayerContext.tsx · prev()</span>
+    </div>
+    <div class="bug-body">
+      <p>The "back" button calls <span class="inline-code">prev()</span> which only seeks the current song to position 0 — it never navigates to a previously played song. PlayerContext keeps no playback history stack. The button gives users a false affordance.</p>
+      <div class="label">Fix — Add a history stack</div>
+      <pre><code><span class="code-comment">// Add history state</span>
+<span class="code-kw">const</span> [history, setHistory] = useState&lt;<span class="code-type">QueueItem</span>[]&gt;([]);
+<span class="code-kw">const</span> historyRef = useRef(history);
+historyRef.current = history;
+
+<span class="code-comment">// Push to history when playSong fires</span>
+<span class="code-kw">const</span> playSong = useCallback((...) => {
+  <span class="code-kw">if</span> (currentSongRef.current) {
+    setHistory(h => [...h.slice(-20), currentSongRef.current!]);
+  }
+  ...
+}, [...]);
+
+<span class="code-comment">// Fix prev()</span>
+<span class="code-kw">const</span> prev = useCallback(() => {
+  <span class="code-kw">const</span> h = historyRef.current;
+  <span class="code-kw">if</span> (h.length === <span class="code-num">0</span>) {
+    sendYTCommand(<span class="code-str">'seekTo'</span>, [<span class="code-num">0</span>, <span class="code-type">true</span>]); <span class="code-comment">// restart current</span>
+    <span class="code-kw">return</span>;
+  }
+  <span class="code-kw">const</span> prev = h[h.length - <span class="code-num">1</span>];
+  setHistory(h => h.slice(<span class="code-num">0</span>, -<span class="code-num">1</span>));
+  setCurrentSong(prev);
+  fetchYouTubeIdInner(prev.song_id);
+}, [fetchYouTubeIdInner, sendYTCommand]);</code></pre>
+    </div>
+  </div>
+
+  <!-- BUG 8: iTunes songs identical features -->
+  <div class="bug-card severity-high">
+    <div class="bug-header">
+      <span class="bug-severity sev-high">HIGH</span>
+      <span class="bug-title">All iTunes Songs Have Identical Placeholder Audio Features</span>
+      <span class="bug-location">genai_pipeline.py · _save_song_to_db()</span>
+    </div>
+    <div class="bug-body">
+      <p>Every song fetched from iTunes is inserted with <span class="inline-code">tempo=120, energy=0.5, danceability=0.5, valence=0.5, mfcc_1-5=0</span>. This means in the Analytics pipeline, all iTunes-origin songs look <strong>identical</strong> to the FCM and lookalike scorers. If a GenAI song gets played and seeds the user vector, subsequent analytics recommendations pull dozens of sonically identical placeholder songs to the top of the candidate pool.</p>
+      <div class="label">Fix — Enrich features at insert time or skip them from Analytics</div>
+      <pre><code><span class="code-comment"># Option A: Tag iTunes songs so Analytics skips them as candidates</span>
+<span class="code-comment"># Add a column: songs.feature_source = 'msd' | 'itunes_placeholder'</span>
+<span class="code-comment"># In _load_candidate_features:</span>
+<span class="code-str">"""
+  WHERE sf.tempo IS NOT NULL
+  AND (s.feature_source = 'msd' OR s.feature_source IS NULL)
+"""</span>
+
+<span class="code-comment"># Option B: Use AcousticBrainz or an audio features API</span>
+<span class="code-comment"># to enrich after insert (background task)</span>
+
+<span class="code-comment"># Option C (quick): Use the iTunes genre to pick a less-neutral centroid</span>
+genre_defaults = {
+    <span class="code-str">'Rock'</span>: dict(tempo=<span class="code-num">130</span>, energy=<span class="code-num">0.85</span>, danceability=<span class="code-num">0.48</span>, ...),
+    <span class="code-str">'Pop'</span>:  dict(tempo=<span class="code-num">118</span>, energy=<span class="code-num">0.72</span>, danceability=<span class="code-num">0.74</span>, ...),
+    <span class="code-comment"># etc. — already defined in onboarding.py GENRE_VECTORS!</span>
+}</code></pre>
+      <div class="callout warn">
+        <div class="callout-icon">💡</div>
+        <div class="callout-body">The <span class="inline-code">GENRE_VECTORS</span> dict in <span class="inline-code">onboarding.py</span> already has exactly the per-genre centroids you need. Reuse them in <span class="inline-code">_save_song_to_db()</span> to give iTunes songs meaningful feature estimates instead of neutral 0.5s.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- BUG: Recommendations table never written -->
+  <div class="bug-card severity-high">
+    <div class="bug-header">
+      <span class="bug-severity sev-high">HIGH</span>
+      <span class="bug-title">Recommendations Table Is Never Written To</span>
+      <span class="bug-location">db_models.py · all pipelines</span>
+    </div>
+    <div class="bug-body">
+      <p>The <span class="inline-code">Recommendation</span> DB model exists with full columns (user_id, song_id, mode, score, explanation). The <span class="inline-code">User</span> model has a <span class="inline-code">recommendations</span> relationship. But none of the three pipelines ever write to this table. Every recommendation request is a black hole — zero historical recommendation data is persisted for analysis, A/B testing, or model improvement.</p>
+      <div class="label">Fix — Async background insert after response</div>
+      <pre><code><span class="code-comment"># In get_recommendations(), after pipeline returns:</span>
+<span class="code-kw">from</span> fastapi import BackgroundTasks
+
+<span class="code-kw">async def</span> <span class="code-fn">_persist_recommendations</span>(db, user_id, mode, recs):
+    <span class="code-kw">for</span> rec <span class="code-kw">in</span> recs:
+        db.add(Recommendation(
+            user_id=user_id, song_id=rec.song_id,
+            mode=mode.value, score=rec.score,
+            explanation=rec.explanation,
+        ))
+    <span class="code-kw">await</span> db.commit()
+
+<span class="code-comment"># Add BackgroundTasks parameter and fire after return</span>
+background_tasks.add_task(_persist_recommendations, db, user_id, mode, result.recommendations)</code></pre>
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════ SECTION 4: RECOMMENDATION SYSTEM ══════════════ -->
+<section class="section" id="s4">
+  <div class="section-header">
+    <span class="section-num">04</span>
+    <h2 class="section-title">Recommendation System Analysis</h2>
+    <span class="section-tag tag-medium">ML ANALYSIS</span>
+  </div>
+
+  <h3>How Real Is the Analytics Pipeline?</h3>
+  <p>The pipeline is <strong>legitimately real</strong> ML, not mock code. The FCM model at <span class="inline-code">backend/models/fcm_model.pkl</span> is only 2.1KB — suspicious. A real FCM fit on 10K songs × 9 features with 10 clusters should be ~50-100KB. This is likely a toy model trained on a small subset. The training code in <span class="inline-code">train_fcm.py</span> confirms this.</p>
+  <p>The collaborative filtering is a real item-item overlap SQL query finding similar users. The lookalike scorer combines cosine similarity and Jaccard on binarized features — a real technique. The weighted sum (0.30 + 0.40 + 0.30) is correct.</p>
+
+  <div class="callout warn">
+    <div class="callout-icon">⚠️</div>
+    <div class="callout-body">
+      <div class="callout-title">The 5 MFCCs Are Weak Features</div>
+      The feature vector uses only <span class="inline-code">mfcc_1</span> through <span class="inline-code">mfcc_5</span>. Real music recommendation (like MSD research) uses 13-20 MFCC coefficients plus their deltas and delta-deltas. The current 5-MFCC + 4-continuous setup provides limited timbral discrimination. More importantly, the MSD dataset's actual MFCC values are often zero in the seed data as well.
+    </div>
+  </div>
+
+  <h3>GenAI Pipeline Honest Assessment</h3>
+  <table>
+    <tr><th>Component</th><th>Quality</th><th>Issue</th></tr>
+    <tr><td>iTunes API search</td><td><span class="pill pill-green">Good</span></td><td>3 parallel queries, dedup by itunes_id, 4s timeout</td></tr>
+    <tr><td>Search query building</td><td><span class="pill pill-amber">Weak</span></td><td>Only uses artist names from history — no genre, no mood inference</td></tr>
+    <tr><td>Sentence transformer</td><td><span class="pill pill-green">Good</span></td><td>all-mpnet-base-v2 is a strong model; batch encoding is correct</td></tr>
+    <tr><td>Text representation</td><td><span class="pill pill-amber">Weak</span></td><td>"title artist genre album" is sparse. No lyrics, no audio description</td></tr>
+    <tr><td>Per-song embedding cache</td><td><span class="pill pill-green">Excellent</span></td><td>Byte-level Redis storage, 24h TTL, partial cache hits handled</td></tr>
+    <tr><td>Cold start</td><td><span class="pill pill-green">Good</span></td><td>Falls back to "top hits 2024" queries — functional</td></tr>
+  </table>
+
+  <h3>How to Make Recommendations Actually Feel Personalized</h3>
+  <ul>
+    <li><strong>Use the signal weights more aggressively in GenAI</strong> — if user has liked "sad slow ballads" in play history, inject that as a query modifier: <span class="inline-code">"sad slow ballads like {artist}"</span></li>
+    <li><strong>Track per-genre play ratios</strong> — if 70% of plays are Hip-Hop, bias iTunes searches toward Hip-Hop queries proportionally</li>
+    <li><strong>Use the vibe check persona in GenAI queries</strong> — "Hype Machine" users → energy queries; "Deep Listener" users → ambient/jazz queries</li>
+    <li><strong>Collaborative filtering is currently weak</strong> — only counts overlap, not weighted by signal. A skipped overlapping song should count less than a liked one. Weight CF by <span class="inline-code">SIGNAL_LIKE / SIGNAL_PLAY</span> ratio</li>
+    <li><strong>Diversify beyond play_count ordering for candidates</strong> — the 200-song pool is ordered by <span class="inline-code">play_count DESC</span>. Popular songs dominate. Add a recency slot: include some recently-added songs regardless of play_count</li>
+  </ul>
+</section>
+
+<!-- ══════════════ SECTION 5: STATE MANAGEMENT ══════════════ -->
+<section class="section" id="s5">
+  <div class="section-header">
+    <span class="section-num">05</span>
+    <h2 class="section-title">State Management & Data Handling</h2>
+    <span class="section-tag tag-medium">ANALYSIS</span>
+  </div>
+
+  <h3>State Inventory</h3>
+  <table>
+    <tr><th>State</th><th>Location</th><th>Problem</th></tr>
+    <tr><td>Recommendation data</td><td>React Query cache</td><td><span class="pill pill-green">Good</span> — proper staleTime, retry:1</td></tr>
+    <tr><td>Current mode / queryText</td><td>useState in page.tsx</td><td><span class="pill pill-green">Fine</span> — local to the page, resets correctly on mode change</td></tr>
+    <tr><td>Player state (song, queue, volume)</td><td>PlayerContext useState</td><td><span class="pill pill-amber">OK</span> — lost on refresh. Volume, queue, current song all reset</td></tr>
+    <tr><td>Liked songs</td><td>PlayerContext Set&lt;number&gt;</td><td><span class="pill pill-red">Bug</span> — not hydrated from backend. Out of sync permanently.</td></tr>
+    <tr><td>Library data (playlists, liked)</td><td>Local useState in library page</td><td><span class="pill pill-amber">Suboptimal</span> — not React Query. No cache. Refetches every tab switch.</td></tr>
+    <tr><td>Auth token</td><td>localStorage</td><td><span class="pill pill-amber">OK</span> — standard but no refresh token / expiry check</td></tr>
+  </table>
+
+  <h3>Prop Drilling Assessment</h3>
+  <p>Minimal prop drilling. <span class="inline-code">onPlay</span>, <span class="inline-code">onInfoClick</span>, <span class="inline-code">onAddToPlaylist</span> are passed page → Feed → SongCard — acceptable for this depth. SongCard accesses <span class="inline-code">usePlayer()</span> directly, which is correct (it needs the full player state anyway). No unnecessary context subscriptions found.</p>
+
+  <h3>Re-render Issues</h3>
+  <p>The <span class="inline-code">likedSongs: Set&lt;number&gt;</span> in PlayerContext causes a known React re-render issue. <span class="inline-code">isLiked</span> is a <span class="inline-code">useCallback</span> that depends on <span class="inline-code">likedSongs</span>, so every like action re-renders <strong>all</strong> mounted SongCards. Fix: use a Map or move like state to a separate context with more granular subscriptions.</p>
+
+  <h3>Library Page — React Query Migration Needed</h3>
+  <pre><code><span class="code-comment">// Current: manual fetch (no cache, no dedup, re-fetches every tab)</span>
+useEffect(() => { libraryApi.getLikedSongs().then(...) }, [tab]);
+
+<span class="code-comment">// Better: React Query (cached, background refresh, shared)</span>
+<span class="code-kw">const</span> { data: likedData } = useQuery({
+  queryKey: [<span class="code-str">'library'</span>, <span class="code-str">'liked'</span>],
+  queryFn: () => libraryApi.getLikedSongs().then(r => r.data.songs),
+  staleTime: <span class="code-num">60_000</span>,
+  enabled: tab === <span class="code-str">'liked'</span>,
+});</code></pre>
+</section>
+
+<!-- ══════════════ SECTION 6: PERFORMANCE ══════════════ -->
+<section class="section" id="s6">
+  <div class="section-header">
+    <span class="section-num">06</span>
+    <h2 class="section-title">Performance Analysis</h2>
+    <span class="section-tag tag-medium">OPTIMIZATION</span>
+  </div>
+
+  <h3>Backend Performance Issues</h3>
+
+  <div class="info-grid">
+    <div class="info-card">
+      <div class="info-card-label">N+1 Query Risk</div>
+      <div class="info-card-value">_save_song_to_db()</div>
+      <div class="info-card-sub">4 separate SQL queries per song (check existing, genre lookup/insert, artist lookup/insert, song insert). For 45 candidates → up to 180 queries per request.</div>
+    </div>
+    <div class="info-card">
+      <div class="info-card-label">Collaborative Filter</div>
+      <div class="info-card-value">Uncached</div>
+      <div class="info-card-sub">The CF query runs a full join across play_history on every recommendation request. Should be cached per user_id with a 5min TTL alongside the user vector.</div>
+    </div>
+    <div class="info-card">
+      <div class="info-card-label">Embedding Warmup</div>
+      <div class="info-card-value">~78 seconds</div>
+      <div class="info-card-sub">Model warmup in lifespan is correct. But run_in_executor with the default thread pool can block other startup tasks. Use a dedicated ThreadPoolExecutor.</div>
+    </div>
+    <div class="info-card">
+      <div class="info-card-label">Ticker Interval</div>
+      <div class="info-card-value">500ms × ∞</div>
+      <div class="info-card-sub">PlayerContext runs a 500ms setInterval indefinitely while isPlaying. Low overhead, but not cleaned up if PlayerProvider unmounts. Add cleanup in useEffect return.</div>
+    </div>
+  </div>
+
+  <h3>Fix: Batch Song Saves in GenAI Pipeline</h3>
+  <pre><code><span class="code-comment"># Instead of N queries per song, batch the lookup</span>
+itunes_ids = [c[<span class="code-str">'itunes_id'</span>] <span class="code-kw">for</span> c <span class="code-kw">in</span> candidates]
+existing = <span class="code-kw">await</span> db.execute(
+    text(<span class="code-str">"SELECT id, mb_id FROM songs WHERE mb_id = ANY(:ids)"</span>),
+    {<span class="code-str">"ids"</span>: itunes_ids}
+)
+existing_map = {row.mb_id: row.id <span class="code-kw">for</span> row <span class="code-kw">in</span> existing.fetchall()}
+
+<span class="code-comment"># Only process songs not already in DB</span>
+new_candidates = [c <span class="code-kw">for</span> c <span class="code-kw">in</span> candidates <span class="code-kw">if</span> c[<span class="code-str">'itunes_id'</span>] <span class="code-kw">not in</span> existing_map]</code></pre>
+
+  <h3>Frontend Performance</h3>
+  <ul>
+    <li><strong>ComparisonDashboard</strong> fires 3 simultaneous API requests (via <span class="inline-code">useAllModes</span>) — this is by design and acceptable. React Query's staleTime prevents refetch on re-render.</li>
+    <li><strong>SongCard cover images</strong> have no lazy loading. Add <span class="inline-code">loading="lazy"</span> to <span class="inline-code">&lt;img&gt;</span> tags to defer off-screen images.</li>
+    <li><strong>YouTube iframe</strong> persists across song changes (same iframe, different <span class="inline-code">src</span>). This forces a full iframe reload each song. Consider using the YT IFrame Player API properly with <span class="inline-code">loadVideoById()</span> instead of changing the <span class="inline-code">src</span>.</li>
+  </ul>
+</section>
+
+<!-- ══════════════ SECTION 7: SECURITY ══════════════ -->
+<section class="section" id="s7">
+  <div class="section-header">
+    <span class="section-num">07</span>
+    <h2 class="section-title">Security Review</h2>
+    <span class="section-tag tag-critical">CRITICAL</span>
+  </div>
+
+  <table>
+    <tr><th>Issue</th><th>Risk</th><th>Fix</th></tr>
+    <tr>
+      <td>SECRET_KEY in committed .env</td>
+      <td><span class="pill pill-red">Critical</span></td>
+      <td>Rotate immediately. Add <span class="inline-code">.env</span> to <span class="inline-code">.gitignore</span>. Use env secrets manager in prod.</td>
+    </tr>
+    <tr>
+      <td>CORS allows only localhost</td>
+      <td><span class="pill pill-amber">High</span></td>
+      <td>Make <span class="inline-code">allow_origins</span> configurable via <span class="inline-code">settings.ALLOWED_ORIGINS</span> env var. Blocks any staging or production deployment.</td>
+    </tr>
+    <tr>
+      <td>JWT stored in localStorage</td>
+      <td><span class="pill pill-amber">Medium</span></td>
+      <td>Vulnerable to XSS. Consider httpOnly cookie with CSRF protection for production. Low risk for a dev project.</td>
+    </tr>
+    <tr>
+      <td>No rate limiting on recommendations API</td>
+      <td><span class="pill pill-amber">Medium</span></td>
+      <td>GenAI mode hits iTunes API per request. No throttle = iTunes rate-limit bans. Add per-user rate limiting via Redis with <span class="inline-code">slowapi</span>.</td>
+    </tr>
+    <tr>
+      <td>Raw SQL in pipelines</td>
+      <td><span class="pill pill-blue">Low</span></td>
+      <td>All queries use <span class="inline-code">text()</span> with named <span class="inline-code">:param</span> binding — no string concatenation for user input. Safe.</td>
+    </tr>
+    <tr>
+      <td>No input validation on query_text</td>
+      <td><span class="pill pill-blue">Low</span></td>
+      <td>The <span class="inline-code">query_text</span> is sent directly to iTunes API. Add length limit (max 200 chars) and sanitization. Currently unbounded.</td>
+    </tr>
+    <tr>
+      <td>YouTube search URL injection</td>
+      <td><span class="pill pill-blue">Low</span></td>
+      <td><span class="inline-code">window.open(youtube_url)</span> in SongCard uses <span class="inline-code">encodeURIComponent</span> — safe.</td>
+    </tr>
+  </table>
+</section>
+
+<!-- ══════════════ SECTION 8: DOCKER ══════════════ -->
+<section class="section" id="s8">
+  <div class="section-header">
+    <span class="section-num">08</span>
+    <h2 class="section-title">Docker & Dev Setup</h2>
+    <span class="section-tag tag-medium">DEVOPS</span>
+  </div>
+
+  <h3>Issues Found</h3>
+
+  <div class="bug-card severity-high">
+    <div class="bug-header">
+      <span class="bug-severity sev-high">HIGH</span>
+      <span class="bug-title">Frontend NEXT_PUBLIC_API_URL Points to localhost — Breaks in CI/Staging</span>
+      <span class="bug-location">docker-compose.yml</span>
+    </div>
+    <div class="bug-body">
+      <p>The frontend container has <span class="inline-code">NEXT_PUBLIC_API_URL=http://localhost:8000</span>. In dev mode (<span class="inline-code">npm run dev</span>), <span class="inline-code">NEXT_PUBLIC_</span> variables are available at runtime via <span class="inline-code">process.env</span>. Since all API calls are client-side (axios), <span class="inline-code">localhost:8000</span> is resolved by the <strong>browser</strong>, not the container — so it works when port 8000 is exposed. However, any SSR fetch (getServerSideProps etc.) or CI environment would break.</p>
+      <div class="label">Fix</div>
+      <div class="diff-block">
+        <div class="diff-hdr">docker-compose.yml</div>
+        <div class="diff-minus">-     - NEXT_PUBLIC_API_URL=http://localhost:8000</div>
+        <div class="diff-plus">+     - NEXT_PUBLIC_API_URL=http://localhost:8000  # browser → host mapping, correct for dev</div>
+        <div class="diff-plus">+     # For SSR: also set INTERNAL_API_URL=http://backend:8000</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="bug-card severity-high">
+    <div class="bug-header">
+      <span class="bug-severity sev-high">HIGH</span>
+      <span class="bug-title">Backend Volume Mount Overrides Docker-Built Models</span>
+      <span class="bug-location">docker-compose.yml · backend service</span>
+    </div>
+    <div class="bug-body">
+      <p>The backend container has <span class="inline-code">volumes: - ./backend:/app</span>. This mounts the host's <span class="inline-code">./backend</span> over the container's <span class="inline-code">/app</span>. The <span class="inline-code">fcm_model.pkl</span> is in <span class="inline-code">backend/models/</span> on host, so it works. But the <span class="inline-code">COPY . .</span> instruction in the Dockerfile is effectively ignored at runtime — all files come from the volume mount. If the model file is missing on the host, the container silently falls back to live FCM.</p>
+      <p>The <span class="inline-code">--reload</span> flag in the compose <span class="inline-code">command</span> also means any code edit triggers a full reload — the 78-second embedding model warmup runs every time a Python file is saved during development.</p>
+      <div class="label">Fix — Separate model volume from code reload</div>
+      <pre><code><span class="code-comment"># docker-compose.yml — mount code but keep models from image</span>
+backend:
+  volumes:
+    - ./backend/app:/app/app          <span class="code-comment"># only hot-reload app code</span>
+    - backend_models:/app/models      <span class="code-comment"># models persist from image</span>
+  command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+           --reload-dir /app/app      <span class="code-comment"># only watch app/ for reloads</span></code></pre>
+    </div>
+  </div>
+
+  <h3>What Works Well in Docker Setup</h3>
+  <ul>
+    <li>Health checks on both postgres and redis with <span class="inline-code">depends_on condition: service_healthy</span> — correct startup ordering</li>
+    <li>Torch CPU-only installed from PyTorch index before requirements.txt — avoids CUDA download, saves ~2GB</li>
+    <li>Redis LRU eviction policy (<span class="inline-code">allkeys-lru</span>) with 256MB limit — prevents OOM</li>
+    <li>Named volumes for postgres_data and redis_data — data persists across container restarts</li>
+  </ul>
+
+  <!-- Stray files note -->
+  <div class="callout warn" style="margin-top:16px">
+    <div class="callout-icon">⚠️</div>
+    <div class="callout-body">
+      <div class="callout-title">Stray Files at Project Root</div>
+      <span class="inline-code">album_page.tsx</span>, <span class="inline-code">artist_page.tsx</span>, <span class="inline-code">library.py</span>, <span class="inline-code">PlayerContext.tsx</span>, <span class="inline-code">artist_album_routes.py</span> all exist at the repo root — duplicates of files in <span class="inline-code">frontend/src/</span> and <span class="inline-code">backend/app/</span>. These are development leftovers that will cause confusion and may hide the actual running code. Delete them.
+    </div>
+  </div>
+</section>
+
+<!-- ══════════════ SECTION 9: UX ══════════════ -->
+<section class="section" id="s9">
+  <div class="section-header">
+    <span class="section-num">09</span>
+    <h2 class="section-title">UX & Product Thinking</h2>
+    <span class="section-tag tag-medium">PRODUCT</span>
+  </div>
+
+  <h3>What Works and Feels Real</h3>
+  <ul>
+    <li>The three-mode architecture with the latency indicator gives genuine technical differentiation — users can actually compare modes</li>
+    <li>The Vibe Check onboarding is a strong cold-start solution with a nice "persona reveal" mechanic</li>
+    <li>The AI explanation text (<span class="inline-code">song.explanation</span>) on GenAI/Hybrid cards is the kind of transparency users love</li>
+    <li>Auto-queue fetch when queue empties (<span class="inline-code">fetchAndQueueNext</span>) is a real product-quality feature</li>
+    <li>The <span class="inline-code">fallback_used</span> warning indicator in the feed header is excellent developer/power-user communication</li>
+  </ul>
+
+  <h3>What Feels Broken / Incomplete</h3>
+  <table>
+    <tr><th>Issue</th><th>User Impact</th><th>Fix Priority</th></tr>
+    <tr><td>Next button does nothing</td><td>Core playback broken</td><td><span class="pill pill-red">P0</span></td></tr>
+    <tr><td>No onboarding UI in frontend</td><td>Vibe check backend exists but where's the UI?</td><td><span class="pill pill-red">P0</span></td></tr>
+    <tr><td>Liked songs reset on refresh</td><td>Heartbreaks on every page load</td><td><span class="pill pill-red">P0</span></td></tr>
+    <tr><td>Can't click into playlists</td><td>Playlist page shows list but no "view songs"</td><td><span class="pill pill-amber">P1</span></td></tr>
+    <tr><td>Analytics mode has no cover art</td><td>All MSD songs show the Music icon placeholder</td><td><span class="pill pill-amber">P1</span></td></tr>
+    <tr><td>30-second iTunes preview not used</td><td>All playback goes through YouTube despite having preview_url</td><td><span class="pill pill-amber">P1</span></td></tr>
+    <tr><td>No login/register UI visible</td><td>App appears broken on first visit</td><td><span class="pill pill-red">P0</span></td></tr>
+    <tr><td>genre tags not clickable</td><td>Dead UI element — should filter recommendations</td><td><span class="pill pill-blue">P2</span></td></tr>
+  </table>
+
+  <h3>The iTunes Preview URL Is a Missed Opportunity</h3>
+  <p>GenAI pipeline correctly saves <span class="inline-code">preview_url</span> (30-second Apple Music preview) and <span class="inline-code">cover_url</span> to every iTunes song. But PlayerContext ignores <span class="inline-code">preview_url</span> entirely — it always fetches a YouTube video. For iTunes songs, you could play the 30s preview via <span class="inline-code">&lt;audio&gt;</span> instantly with no YouTube API latency and no "YT" badge needed. This would make GenAI mode feel dramatically faster and more polished.</p>
+</section>
+
+<!-- ══════════════ SECTION 10: ROADMAP ══════════════ -->
+<section class="section" id="s10">
+  <div class="section-header">
+    <span class="section-num">10</span>
+    <h2 class="section-title">Upgrade Roadmap</h2>
+    <span class="section-tag tag-good">STRATEGIC</span>
+  </div>
+
+  <div class="phase-card">
+    <div class="phase-header">
+      <div class="phase-num phase-1">1</div>
+      <div>
+        <div class="phase-title">Phase 1 — Fix & Stabilize</div>
+        <div class="phase-sub">Must-fix bugs. Nothing else ships until these are done.</div>
+      </div>
+    </div>
+    <div class="phase-body">
+      <div class="phase-item"><div class="phase-item-bullet b-red"></div>Fix <span class="inline-code">next()</span> button (1-line fix: set flag to false, not true)</div>
+      <div class="phase-item"><div class="phase-item-bullet b-red"></div>Rotate SECRET_KEY + add .env to .gitignore</div>
+      <div class="phase-item"><div class="phase-item-bullet b-red"></div>Fix Redis connection leak — wrap in async context manager or FastAPI dependency</div>
+      <div class="phase-item"><div class="phase-item-bullet b-red"></div>Hydrate likedSongs from /api/v1/library/liked on PlayerProvider mount</div>
+      <div class="phase-item"><div class="phase-item-bullet b-amber"></div>Fix toggleLike: don't call logPlay — create a separate /api/v1/library/liked POST endpoint</div>
+      <div class="phase-item"><div class="phase-item-bullet b-amber"></div>Return artist_id from GenAI pipeline save</div>
+      <div class="phase-item"><div class="phase-item-bullet b-amber"></div>Normalize hybrid fusion weights to sum to 1.0</div>
+      <div class="phase-item"><div class="phase-item-bullet b-amber"></div>Build the Vibe Check onboarding UI (the backend is done, just needs a frontend page)</div>
+      <div class="phase-item"><div class="phase-item-bullet b-amber"></div>Delete stray root-level .tsx/.py files — they're dev artifacts</div>
+      <div class="phase-item"><div class="phase-item-bullet b-blue"></div>Add prev() history stack (20-item ring buffer)</div>
+    </div>
+  </div>
+
+  <div class="phase-card">
+    <div class="phase-header">
+      <div class="phase-num phase-2">2</div>
+      <div>
+        <div class="phase-title">Phase 2 — Improve the System</div>
+        <div class="phase-sub">Quality improvements. System feels like a real product.</div>
+      </div>
+    </div>
+    <div class="phase-body">
+      <div class="phase-item"><div class="phase-item-bullet b-amber"></div>Use iTunes preview_url for GenAI mode playback — instant &lt;audio&gt; instead of YouTube iframe per song</div>
+      <div class="phase-item"><div class="phase-item-bullet b-amber"></div>Enrich iTunes song features using GENRE_VECTORS from onboarding (reuse existing data)</div>
+      <div class="phase-item"><div class="phase-item-bullet b-amber"></div>Batch song saves in GenAI pipeline (single SELECT ANY instead of N queries)</div>
+      <div class="phase-item"><div class="phase-item-bullet b-amber"></div>Cache collaborative filtering result in Redis alongside user vector (same TTL)</div>
+      <div class="phase-item"><div class="phase-item-bullet b-blue"></div>Migrate library page to React Query (remove manual useEffect fetching)</div>
+      <div class="phase-item"><div class="phase-item-bullet b-blue"></div>Add CORS origins to environment config (not hardcoded localhost)</div>
+      <div class="phase-item"><div class="phase-item-bullet b-blue"></div>Persist recommendations to the recommendations table (background task)</div>
+      <div class="phase-item"><div class="phase-item-bullet b-blue"></div>Clickable playlist songs — add /library/playlists/[id] page</div>
+      <div class="phase-item"><div class="phase-item-bullet b-blue"></div>Make genre tags clickable to filter recommendations</div>
+      <div class="phase-item"><div class="phase-item-bullet b-blue"></div>Fix docker-compose volume so hot-reload doesn't re-warm the embedding model</div>
+      <div class="phase-item"><div class="phase-item-bullet b-purple"></div>Add cover art to Analytics mode songs (link to Last.fm cover art API by artist+title)</div>
+      <div class="phase-item"><div class="phase-item-bullet b-purple"></div>Add slowapi rate limiting to recommendations endpoint (protect iTunes API quota)</div>
+    </div>
+  </div>
+
+  <div class="phase-card">
+    <div class="phase-header">
+      <div class="phase-num phase-3">3</div>
+      <div>
+        <div class="phase-title">Phase 3 — Scale Like a Real Product</div>
+        <div class="phase-sub">ML improvements, user profiling, production readiness.</div>
+      </div>
+    </div>
+    <div class="phase-body">
+      <div class="phase-item"><div class="phase-item-bullet b-green"></div>Upgrade Analytics ML: retrain FCM on full 10K songs with 13 MFCCs + spectral features. The current 2.1KB model is too small.</div>
+      <div class="phase-item"><div class="phase-item-bullet b-green"></div>Implement real-time user preference update: on every play event, update user_preferences with exponential moving average instead of only on Vibe Check</div>
+      <div class="phase-item"><div class="phase-item-bullet b-green"></div>Add weighted collaborative filtering: overlap score × (liked/replayed ratio) instead of raw count</div>
+      <div class="phase-item"><div class="phase-item-bullet b-green"></div>Upgrade GenAI text representation: use "song description" embeddings (genre, mood, instruments, era) instead of just "title artist genre album"</div>
+      <div class="phase-item"><div class="phase-item-bullet b-blue"></div>Add feedback loop: A/B test analytics vs genai vs hybrid per user segment using the (now populated) recommendations table</div>
+      <div class="phase-item"><div class="phase-item-bullet b-blue"></div>Async song enrichment worker: background Celery/ARQ task to enrich iTunes songs with AcousticBrainz features after insert</div>
+      <div class="phase-item"><div class="phase-item-bullet b-blue"></div>Session-based implicit feedback: track scroll depth, play duration ratio (played 10s out of 30s = weak signal) for more nuanced signal weights</div>
+      <div class="phase-item"><div class="phase-item-bullet b-purple"></div>Replace YT IFrame src swap with loadVideoById() API call — eliminates 300ms iframe reload cost per song transition</div>
+      <div class="phase-item"><div class="phase-item-bullet b-purple"></div>Production deploy: separate nginx for frontend, gunicorn+uvicorn workers for backend, Redis Cluster, PostgreSQL with connection pooling (pgbouncer)</div>
+    </div>
+  </div>
+
+  <div class="callout success" style="margin-top:20px">
+    <div class="callout-icon">✅</div>
+    <div class="callout-body">
+      <div class="callout-title">Honest Final Assessment</div>
+      This is a genuinely ambitious project with real ML (not mock data), thoughtful fallback chains, proper async patterns, and good type safety throughout. The architecture is sound. The bugs are fixable in hours, not days. The biggest gap is the missing Vibe Check frontend UI and the broken Next button — fix those two and this project goes from "broken demo" to "real product" immediately. The recommendation quality for new users (via iTunes + sentence transformers) is better than most toy projects. With Phase 1+2 fixes, this becomes a legitimately impressive portfolio piece.
+    </div>
+  </div>
+</section>
+
+</main>
+</div>
+
+<script>
+// Smooth scroll for sidebar links
+document.querySelectorAll('a[href^="#"]').forEach(a => {
+  a.addEventListener('click', e => {
+    e.preventDefault();
+    const el = document.querySelector(a.getAttribute('href'));
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+});
+</script>
+</body>
+</html>

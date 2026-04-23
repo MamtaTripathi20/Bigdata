@@ -1,0 +1,49 @@
+=================================================================
+MUSIC RECOMMENDER — WEEK 4 EVALUATION REPORT
+Generated: 2026-03-22 08:38
+=================================================================
+
+1. QUANTITATIVE METRICS (averaged over test users)
+
+Metric                          Analytics        GenAI       Hybrid
+-----------------------------------------------------------------
+Precision@10                       0.0000       0.0100       0.0050
+Recall@10                          0.0000       0.0134       0.0063
+NDCG@10                            0.0000       0.0098       0.0042
+Diversity                          0.7300       0.4325       0.8550
+Genre Coverage                     2.8000       2.9000       3.5000
+Latency p50 (ms)                       36         3794         2974
+Latency p95 (ms)                       93         7666         7964
+
+2. COLD-START vs WARM-START PRECISION@10
+
+Mode           Warm-Start   Cold-Start   Difference
+--------------------------------------------------
+ANALYTICS          0.0000       0.0000      +0.0000
+GENAI              0.0133       0.0000      +0.0133
+HYBRID             0.0067       0.0000      +0.0067
+
+3. KEY FINDINGS
+
+  Best Precision@10 : GENAI (0.0100)
+  Best NDCG@10      : GENAI (0.0098)
+  Best Diversity    : HYBRID (0.8550)
+  Fastest (p50)     : ANALYTICS (36ms)
+  Best Cold-Start   : ANALYTICS (0.0000)
+
+4. VIVA TALKING POINTS
+
+  - Analytics is 105x faster than GenAI (36ms vs 3794ms p50)
+  - GenAI handles cold-start better: 0.000 vs 0.000 precision for new users
+  - Hybrid achieves best overall quality: NDCG=0.0042
+  - Diversity: Hybrid=0.855 > GenAI=0.432 > Analytics=0.730
+
+5. METHODOLOGY
+
+  - Test users: 20 synthetic users
+  - Warm-start: 15 play history events per user
+  - Cold-start: 2 play history events per user
+  - K: 10 recommendations evaluated
+  - Ground truth: songs user explicitly liked (liked=True)
+  - Dataset: 5950 songs from Million Song Dataset subset
+=================================================================

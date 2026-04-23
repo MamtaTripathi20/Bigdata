@@ -1,0 +1,50 @@
+# Environment — never commit real secrets
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# Node
+node_modules/
+.next/
+out/
+.npm
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test / coverage
+.pytest_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# Alembic
+alembic/versions/__pycache__/
+
+*.pkl
+*.npy
+
+backend/models/*.csv
+backend/models/*.npy
+scripts/*.npy
+scripts/songs_features.csv
+scripts/song_clusters.csv
+scripts/embedding_index.csv
